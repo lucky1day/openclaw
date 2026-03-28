@@ -432,7 +432,7 @@ openclaw [--dev] [--profile <name>] <command>
   - 当向仍使用单账户顶层配置的渠道添加非默认账户时，OpenClaw 会先将账户作用域值移动到 `channels.<channel>.accounts.default`，再写入新账户。
   - 非交互式 `channels add` 不会自动创建 / 升级绑定；仅渠道绑定会继续匹配默认账户。
 - `channels remove`：默认执行禁用；传入 `--delete` 可在无提示下删除配置项。
-- `channels login`：交互式渠道登录（仅 WhatsApp Web）。
+- `channels login`：对已安装且支持二维码 / Web 登录流程的渠道执行交互式登录。
 - `channels logout`：登出某个渠道会话（如支持）。
 
 通用选项：
@@ -443,9 +443,12 @@ openclaw [--dev] [--profile <name>] <command>
 
 `channels login` 选项：
 
-- `--channel <channel>`（默认 `whatsapp`；支持 `whatsapp`/`web`）
+- `--channel <channel>`：当且仅当只有一个已配置渠道支持登录时可省略；否则必填。
 - `--account <id>`
 - `--verbose`
+- `--url <url>`：为基于 Gateway 的登录流程覆盖 Gateway WebSocket 地址。
+- `--token <token>`：为基于 Gateway 的登录流程覆盖 Gateway token。
+- `--timeout <ms>`：Gateway RPC 超时时间，单位毫秒。
 
 `channels logout` 选项：
 

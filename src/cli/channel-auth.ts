@@ -10,18 +10,50 @@ import { setVerbose } from "../globals.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
+import { renderQrToTerminal, writeQrDataUrlToTempFile } from "./channel-auth-qr.js";
+import { callGatewayFromCli, type GatewayRpcOpts } from "./gateway-rpc.js";
 
 type ChannelAuthOptions = {
   channel?: string;
   account?: string;
   verbose?: boolean;
-};
+} & Pick<GatewayRpcOpts, "url" | "token" | "timeout">;
 
 type ChannelPlugin = NonNullable<ReturnType<typeof getChannelPlugin>>;
 type ChannelAuthMode = "login" | "logout";
+const WEB_LOGIN_WAIT_TIMEOUT_MS = 300_000;
+const WEB_LOGIN_RPC_TIMEOUT_MS = 315_000;
+
+type WebLoginStartResult = {
+  qrcodeUrl?: string;
+  message?: string;
+};
+
+type WebLoginWaitResult = {
+  connected?: boolean;
+  message?: string;
+};
+
+function resolveWebLoginWaitRpcTimeout(timeout: string | undefined): string {
+  const parsed = Number(timeout);
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return String(Math.max(parsed, WEB_LOGIN_RPC_TIMEOUT_MS));
+  }
+  return String(WEB_LOGIN_RPC_TIMEOUT_MS);
+}
+
+function supportsGatewayWebLogin(plugin: ChannelPlugin): boolean {
+  if (!plugin.gateway?.loginWithQrStart || !plugin.gateway?.loginWithQrWait) {
+    return false;
+  }
+  const methods = plugin.gatewayMethods ?? [];
+  return methods.includes("web.login.start") && methods.includes("web.login.wait");
+}
 
 function supportsChannelAuthMode(plugin: ChannelPlugin, mode: ChannelAuthMode): boolean {
-  return mode === "login" ? Boolean(plugin.auth?.login) : Boolean(plugin.gateway?.logoutAccount);
+  return mode === "login"
+    ? Boolean(plugin.auth?.login) || supportsGatewayWebLogin(plugin)
+    : Boolean(plugin.gateway?.logoutAccount);
 }
 
 function isConfiguredAuthPlugin(plugin: ChannelPlugin, cfg: OpenClawConfig): boolean {
@@ -126,6 +158,63 @@ function resolveAccountContext(
   return { accountId };
 }
 
+async function runGatewayWebLogin(opts: {
+  plugin: ChannelPlugin;
+  cfg: OpenClawConfig;
+  accountId: string;
+  channelId: string;
+  runtime: RuntimeEnv;
+  verbose: boolean;
+  gatewayRpcOpts: Pick<GatewayRpcOpts, "url" | "token" | "timeout">;
+}) {
+  if (!supportsGatewayWebLogin(opts.plugin)) {
+    throw new Error(`Channel ${opts.channelId} does not support login`);
+  }
+
+  const start = (await callGatewayFromCli("web.login.start", opts.gatewayRpcOpts, {
+    channel: opts.channelId,
+    accountId: opts.accountId,
+    verbose: opts.verbose,
+  })) as WebLoginStartResult;
+
+  if (start.message) {
+    opts.runtime.log(start.message);
+  }
+  if (start.qrcodeUrl) {
+    const renderedInline = await renderQrToTerminal(opts.runtime, start.qrcodeUrl);
+    if (!renderedInline) {
+      const qrPath = await writeQrDataUrlToTempFile(
+        start.qrcodeUrl,
+        opts.channelId,
+        opts.accountId,
+      );
+      if (qrPath) {
+        opts.runtime.log(`QR image saved to: ${qrPath}`);
+      } else if (/^https?:\/\//i.test(start.qrcodeUrl.trim())) {
+        opts.runtime.log(`QR URL: ${start.qrcodeUrl.trim()}`);
+      }
+    }
+  }
+
+  opts.runtime.log("Waiting for QR scan confirmation...");
+  const wait = (await callGatewayFromCli(
+    "web.login.wait",
+    {
+      ...opts.gatewayRpcOpts,
+      timeout: resolveWebLoginWaitRpcTimeout(opts.gatewayRpcOpts.timeout),
+    },
+    {
+      channel: opts.channelId,
+      accountId: opts.accountId,
+      timeoutMs: WEB_LOGIN_WAIT_TIMEOUT_MS,
+    },
+  )) as WebLoginWaitResult;
+  if (!wait.connected) {
+    throw new Error(wait.message || `Channel ${opts.channelId} login failed`);
+  }
+  opts.runtime.log(wait.message || "Channel login succeeded.");
+}
+
 export async function runChannelLogin(
   opts: ChannelAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -140,13 +229,26 @@ export async function runChannelLogin(
   if (configChanged) {
     await writeConfigFile(cfg);
   }
-  const login = plugin.auth?.login;
-  if (!login) {
-    throw new Error(`Channel ${channelInput} does not support login`);
-  }
-  // Auth-only flow: do not mutate channel config here.
   setVerbose(Boolean(opts.verbose));
   const { accountId } = resolveAccountContext(plugin, opts, cfg);
+  const login = plugin.auth?.login;
+  if (!login) {
+    await runGatewayWebLogin({
+      plugin,
+      cfg,
+      accountId,
+      channelId: plugin.id,
+      runtime,
+      verbose: Boolean(opts.verbose),
+      gatewayRpcOpts: {
+        url: opts.url,
+        token: opts.token,
+        timeout: opts.timeout,
+      },
+    });
+    return;
+  }
+  // Auth-only flow: do not mutate channel config here.
   await login({
     cfg,
     accountId,

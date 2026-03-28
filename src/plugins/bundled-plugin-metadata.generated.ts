@@ -3924,6 +3924,46 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "weixin",
+    idHint: "weixin",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/weixin",
+    packageVersion: "2026.3.26",
+    packageDescription: "OpenClaw WeChat channel plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+      channel: {
+        id: "weixin",
+        label: "WeChat",
+        selectionLabel: "WeChat",
+        docsPath: "/channels/weixin",
+        docsLabel: "weixin",
+        blurb: "WeChat direct-message integration via ilink bot APIs.",
+        aliases: ["wechat"],
+        order: 90,
+        quickstartAllowFrom: true,
+      },
+      install: {
+        npmSpec: "@openclaw/weixin",
+        localPath: "extensions/weixin",
+        defaultChoice: "npm",
+        minHostVersion: ">=2026.3.22",
+      },
+    },
+    manifest: {
+      id: "weixin",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+      channels: ["weixin"],
+    },
+  },
+  {
     dirName: "whatsapp",
     idHint: "whatsapp",
     source: {

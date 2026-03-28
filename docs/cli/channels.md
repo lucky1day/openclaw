@@ -60,8 +60,11 @@ If your config was already in a mixed state (named accounts present, missing `de
 
 ```bash
 openclaw channels login --channel whatsapp
+openclaw channels login --channel weixin
 openclaw channels logout --channel whatsapp
 ```
+
+`channels login` works for installed channels that support an interactive login flow. Some channels use direct auth helpers, while gateway-backed QR channels use the Gateway `web.login.start` / `web.login.wait` path under the hood.
 
 ## Troubleshooting
 

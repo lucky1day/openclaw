@@ -16,6 +16,9 @@ const mocks = vi.hoisted(() => ({
   createClackPrompter: vi.fn(),
   ensureChannelSetupPluginInstalled: vi.fn(),
   loadChannelSetupPluginRegistrySnapshotForChannel: vi.fn(),
+  callGatewayFromCli: vi.fn(),
+  renderQrToTerminal: vi.fn(),
+  writeQrDataUrlToTempFile: vi.fn(),
   login: vi.fn(),
   logoutAccount: vi.fn(),
   resolveAccount: vi.fn(),
@@ -54,6 +57,15 @@ vi.mock("../wizard/clack-prompter.js", () => ({
   createClackPrompter: mocks.createClackPrompter,
 }));
 
+vi.mock("./gateway-rpc.js", () => ({
+  callGatewayFromCli: mocks.callGatewayFromCli,
+}));
+
+vi.mock("./channel-auth-qr.js", () => ({
+  renderQrToTerminal: mocks.renderQrToTerminal,
+  writeQrDataUrlToTempFile: mocks.writeQrDataUrlToTempFile,
+}));
+
 vi.mock("../commands/channel-setup/plugin-install.js", () => ({
   ensureChannelSetupPluginInstalled: mocks.ensureChannelSetupPluginInstalled,
   loadChannelSetupPluginRegistrySnapshotForChannel:
@@ -90,6 +102,9 @@ describe("channel-auth", () => {
       installed: true,
       pluginId: "whatsapp",
     });
+    mocks.callGatewayFromCli.mockResolvedValue(undefined);
+    mocks.renderQrToTerminal.mockResolvedValue(false);
+    mocks.writeQrDataUrlToTempFile.mockResolvedValue("/tmp/openclaw-weixin-qr-default.png");
     mocks.loadChannelSetupPluginRegistrySnapshotForChannel.mockReturnValue({
       channels: [{ plugin }],
       channelSetups: [],
@@ -124,6 +139,302 @@ describe("channel-auth", () => {
         channelInput: "whatsapp",
       }),
     );
+  });
+
+  it("falls back to web login RPC for gateway-backed QR channels", async () => {
+    const weixinPlugin = {
+      id: "weixin",
+      auth: {},
+      gatewayMethods: ["web.login.start", "web.login.wait"],
+      gateway: {
+        loginWithQrStart: vi.fn(),
+        loginWithQrWait: vi.fn(),
+        logoutAccount: mocks.logoutAccount,
+      },
+      config: {
+        listAccountIds: vi.fn().mockReturnValue(["default"]),
+        resolveAccount: mocks.resolveAccount,
+      },
+    };
+    mocks.normalizeChannelId.mockImplementation((value) => value);
+    mocks.getChannelPlugin.mockImplementation((value) =>
+      value === "weixin" ? (weixinPlugin as unknown as typeof plugin) : plugin,
+    );
+    mocks.listChannelPlugins.mockReturnValue([weixinPlugin]);
+    mocks.loadConfig.mockReturnValue({ channels: { weixin: {} } });
+    mocks.resolveChannelDefaultAccountId.mockReturnValue("default");
+    mocks.callGatewayFromCli
+      .mockResolvedValueOnce({
+        qrcodeUrl: "data:image/png;base64,abc",
+        message: "使用微信扫描以下二维码，以完成连接。",
+      })
+      .mockResolvedValueOnce({
+        connected: true,
+        accountId: "default",
+        message: "微信账号已连接。",
+      });
+
+    await runChannelLogin({ channel: "weixin" }, runtime);
+
+    expect(mocks.setVerbose).toHaveBeenCalledWith(false);
+    expect(mocks.callGatewayFromCli).toHaveBeenNthCalledWith(
+      1,
+      "web.login.start",
+      {},
+      {
+        channel: "weixin",
+        accountId: "default",
+        verbose: false,
+      },
+    );
+    expect(mocks.writeQrDataUrlToTempFile).toHaveBeenCalledWith(
+      "data:image/png;base64,abc",
+      "weixin",
+      "default",
+    );
+    expect(mocks.callGatewayFromCli).toHaveBeenNthCalledWith(
+      2,
+      "web.login.wait",
+      { timeout: "315000" },
+      {
+        channel: "weixin",
+        accountId: "default",
+        timeoutMs: 300000,
+      },
+    );
+    expect(runtime.log).toHaveBeenCalledWith("使用微信扫描以下二维码，以完成连接。");
+    expect(runtime.log).toHaveBeenCalledWith(
+      "QR image saved to: /tmp/openclaw-weixin-qr-default.png",
+    );
+    expect(runtime.log).toHaveBeenCalledWith("Waiting for QR scan confirmation...");
+    expect(runtime.log).toHaveBeenCalledWith("微信账号已连接。");
+    expect(mocks.login).not.toHaveBeenCalled();
+  });
+
+  it("forwards gateway client opts for gateway-backed QR login", async () => {
+    const weixinPlugin = {
+      id: "weixin",
+      auth: {},
+      gatewayMethods: ["web.login.start", "web.login.wait"],
+      gateway: {
+        loginWithQrStart: vi.fn(),
+        loginWithQrWait: vi.fn(),
+        logoutAccount: mocks.logoutAccount,
+      },
+      config: {
+        listAccountIds: vi.fn().mockReturnValue(["default"]),
+        resolveAccount: mocks.resolveAccount,
+      },
+    };
+    mocks.normalizeChannelId.mockImplementation((value) => value);
+    mocks.getChannelPlugin.mockImplementation((value) =>
+      value === "weixin" ? (weixinPlugin as unknown as typeof plugin) : plugin,
+    );
+    mocks.listChannelPlugins.mockReturnValue([weixinPlugin]);
+    mocks.loadConfig.mockReturnValue({ channels: { weixin: {} } });
+    mocks.resolveChannelDefaultAccountId.mockReturnValue("default");
+    mocks.callGatewayFromCli
+      .mockResolvedValueOnce({
+        qrcodeUrl: "data:image/png;base64,abc",
+        message: "scan",
+      })
+      .mockResolvedValueOnce({
+        connected: true,
+        accountId: "default",
+        message: "linked",
+      });
+
+    await runChannelLogin(
+      {
+        channel: "weixin",
+        url: "ws://127.0.0.1:19001",
+        token: "gateway-token",
+        timeout: "450000",
+      } as never,
+      runtime,
+    );
+
+    expect(mocks.callGatewayFromCli).toHaveBeenNthCalledWith(
+      1,
+      "web.login.start",
+      {
+        url: "ws://127.0.0.1:19001",
+        token: "gateway-token",
+        timeout: "450000",
+      },
+      {
+        channel: "weixin",
+        accountId: "default",
+        verbose: false,
+      },
+    );
+    expect(mocks.callGatewayFromCli).toHaveBeenNthCalledWith(
+      2,
+      "web.login.wait",
+      {
+        url: "ws://127.0.0.1:19001",
+        token: "gateway-token",
+        timeout: "450000",
+      },
+      {
+        channel: "weixin",
+        accountId: "default",
+        timeoutMs: 300000,
+      },
+    );
+  });
+
+  it("renders remote QR URLs inline in the terminal instead of saving a file", async () => {
+    const weixinPlugin = {
+      id: "weixin",
+      auth: {},
+      gatewayMethods: ["web.login.start", "web.login.wait"],
+      gateway: {
+        loginWithQrStart: vi.fn(),
+        loginWithQrWait: vi.fn(),
+        logoutAccount: mocks.logoutAccount,
+      },
+      config: {
+        listAccountIds: vi.fn().mockReturnValue(["default"]),
+        resolveAccount: mocks.resolveAccount,
+      },
+    };
+    mocks.normalizeChannelId.mockImplementation((value) => value);
+    mocks.getChannelPlugin.mockImplementation((value) =>
+      value === "weixin" ? (weixinPlugin as unknown as typeof plugin) : plugin,
+    );
+    mocks.listChannelPlugins.mockReturnValue([weixinPlugin]);
+    mocks.loadConfig.mockReturnValue({ channels: { weixin: {} } });
+    mocks.resolveChannelDefaultAccountId.mockReturnValue("default");
+    mocks.renderQrToTerminal.mockResolvedValueOnce(true);
+    mocks.callGatewayFromCli
+      .mockResolvedValueOnce({
+        qrcodeUrl: "https://liteapp.weixin.qq.com/q/example",
+        message: "使用微信扫描以下二维码，以完成连接。",
+      })
+      .mockResolvedValueOnce({
+        connected: true,
+        accountId: "default",
+        message: "微信账号已连接。",
+      });
+
+    await runChannelLogin({ channel: "weixin" }, runtime);
+
+    expect(mocks.renderQrToTerminal).toHaveBeenCalledWith(
+      runtime,
+      "https://liteapp.weixin.qq.com/q/example",
+    );
+    expect(mocks.writeQrDataUrlToTempFile).not.toHaveBeenCalled();
+    expect(runtime.log).not.toHaveBeenCalledWith(
+      "QR image saved to: /tmp/openclaw-weixin-qr-default.png",
+    );
+  });
+
+  it("floors the wait RPC timeout for gateway-backed QR login", async () => {
+    const weixinPlugin = {
+      id: "weixin",
+      auth: {},
+      gatewayMethods: ["web.login.start", "web.login.wait"],
+      gateway: {
+        loginWithQrStart: vi.fn(),
+        loginWithQrWait: vi.fn(),
+        logoutAccount: mocks.logoutAccount,
+      },
+      config: {
+        listAccountIds: vi.fn().mockReturnValue(["default"]),
+        resolveAccount: mocks.resolveAccount,
+      },
+    };
+    mocks.normalizeChannelId.mockImplementation((value) => value);
+    mocks.getChannelPlugin.mockImplementation((value) =>
+      value === "weixin" ? (weixinPlugin as unknown as typeof plugin) : plugin,
+    );
+    mocks.listChannelPlugins.mockReturnValue([weixinPlugin]);
+    mocks.loadConfig.mockReturnValue({ channels: { weixin: {} } });
+    mocks.resolveChannelDefaultAccountId.mockReturnValue("default");
+    mocks.callGatewayFromCli
+      .mockResolvedValueOnce({
+        qrcodeUrl: "data:image/png;base64,abc",
+        message: "scan",
+      })
+      .mockResolvedValueOnce({
+        connected: true,
+        accountId: "default",
+        message: "linked",
+      });
+
+    await runChannelLogin(
+      {
+        channel: "weixin",
+        timeout: "30000",
+      } as never,
+      runtime,
+    );
+
+    expect(mocks.callGatewayFromCli).toHaveBeenNthCalledWith(
+      1,
+      "web.login.start",
+      {
+        timeout: "30000",
+      },
+      {
+        channel: "weixin",
+        accountId: "default",
+        verbose: false,
+      },
+    );
+    expect(mocks.callGatewayFromCli).toHaveBeenNthCalledWith(
+      2,
+      "web.login.wait",
+      {
+        timeout: "315000",
+      },
+      {
+        channel: "weixin",
+        accountId: "default",
+        timeoutMs: 300000,
+      },
+    );
+  });
+
+  it("logs the raw QR URL when no local QR image file is produced", async () => {
+    const weixinPlugin = {
+      id: "weixin",
+      auth: {},
+      gatewayMethods: ["web.login.start", "web.login.wait"],
+      gateway: {
+        loginWithQrStart: vi.fn(),
+        loginWithQrWait: vi.fn(),
+        logoutAccount: mocks.logoutAccount,
+      },
+      config: {
+        listAccountIds: vi.fn().mockReturnValue(["default"]),
+        resolveAccount: mocks.resolveAccount,
+      },
+    };
+    mocks.normalizeChannelId.mockImplementation((value) => value);
+    mocks.getChannelPlugin.mockImplementation((value) =>
+      value === "weixin" ? (weixinPlugin as unknown as typeof plugin) : plugin,
+    );
+    mocks.listChannelPlugins.mockReturnValue([weixinPlugin]);
+    mocks.loadConfig.mockReturnValue({ channels: { weixin: {} } });
+    mocks.resolveChannelDefaultAccountId.mockReturnValue("default");
+    mocks.renderQrToTerminal.mockResolvedValueOnce(false);
+    mocks.writeQrDataUrlToTempFile.mockResolvedValueOnce(null);
+    mocks.callGatewayFromCli
+      .mockResolvedValueOnce({
+        qrcodeUrl: "https://liteapp.weixin.qq.com/q/example",
+        message: "使用微信扫描以下二维码，以完成连接。",
+      })
+      .mockResolvedValueOnce({
+        connected: true,
+        accountId: "default",
+        message: "微信账号已连接。",
+      });
+
+    await runChannelLogin({ channel: "weixin" }, runtime);
+
+    expect(runtime.log).toHaveBeenCalledWith("QR URL: https://liteapp.weixin.qq.com/q/example");
   });
 
   it("ignores configured channels that do not support login when channel is omitted", async () => {

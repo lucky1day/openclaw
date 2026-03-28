@@ -1,4 +1,4 @@
-import { listChannelPlugins } from "../../channels/plugins/index.js";
+import { listChannelPlugins, normalizeChannelId } from "../../channels/plugins/index.js";
 import {
   ErrorCodes,
   errorShape,
@@ -11,10 +11,24 @@ import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const WEB_LOGIN_METHODS = new Set(["web.login.start", "web.login.wait"]);
 
-const resolveWebLoginProvider = () =>
-  listChannelPlugins().find((plugin) =>
-    (plugin.gatewayMethods ?? []).some((method) => WEB_LOGIN_METHODS.has(method)),
-  ) ?? null;
+function resolveChannelId(params: unknown): string | undefined {
+  if (typeof (params as { channel?: unknown }).channel !== "string") {
+    return undefined;
+  }
+  return normalizeChannelId((params as { channel?: string }).channel) ?? undefined;
+}
+
+const supportsWebLogin = (plugin: { gatewayMethods?: string[] | null }) =>
+  (plugin.gatewayMethods ?? []).some((method) => WEB_LOGIN_METHODS.has(method));
+
+const resolveWebLoginProvider = (params?: unknown) => {
+  const plugins = listChannelPlugins();
+  const channelId = resolveChannelId(params);
+  if (channelId) {
+    return plugins.find((plugin) => plugin.id === channelId) ?? null;
+  }
+  return plugins.find((plugin) => supportsWebLogin(plugin)) ?? null;
+};
 
 function resolveAccountId(params: unknown): string | undefined {
   return typeof (params as { accountId?: unknown }).accountId === "string"
@@ -53,7 +67,7 @@ export const webHandlers: GatewayRequestHandlers = {
     }
     try {
       const accountId = resolveAccountId(params);
-      const provider = resolveWebLoginProvider();
+      const provider = resolveWebLoginProvider(params);
       if (!provider) {
         respondProviderUnavailable(respond);
         return;
@@ -91,7 +105,7 @@ export const webHandlers: GatewayRequestHandlers = {
     }
     try {
       const accountId = resolveAccountId(params);
-      const provider = resolveWebLoginProvider();
+      const provider = resolveWebLoginProvider(params);
       if (!provider) {
         respondProviderUnavailable(respond);
         return;

@@ -444,7 +444,7 @@ Subcommands:
   - When adding a non-default account to a channel still using single-account top-level config, OpenClaw moves account-scoped values into `channels.<channel>.accounts.default` before writing the new account.
   - Non-interactive `channels add` does not auto-create/upgrade bindings; channel-only bindings continue to match the default account.
 - `channels remove`: disable by default; pass `--delete` to remove config entries without prompts.
-- `channels login`: interactive channel login (WhatsApp Web only).
+- `channels login`: interactive channel login for installed channels that expose a QR/web login flow.
 - `channels logout`: log out of a channel session (if supported).
 
 Common options:
@@ -455,9 +455,12 @@ Common options:
 
 `channels login` options:
 
-- `--channel <channel>` (default `whatsapp`; supports `whatsapp`/`web`)
+- `--channel <channel>`: optional when only one configured channel supports login; otherwise required.
 - `--account <id>`
 - `--verbose`
+- `--url <url>`: gateway WebSocket URL override for gateway-backed login flows.
+- `--token <token>`: gateway token override for gateway-backed login flows.
+- `--timeout <ms>`: gateway RPC timeout in ms.
 
 `channels logout` options:
 

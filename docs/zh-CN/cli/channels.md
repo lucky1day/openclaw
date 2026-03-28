@@ -46,8 +46,11 @@ openclaw channels remove --channel telegram --delete
 
 ```bash
 openclaw channels login --channel whatsapp
+openclaw channels login --channel weixin
 openclaw channels logout --channel whatsapp
 ```
+
+`channels login` 适用于已安装且支持交互式登录的渠道。有些渠道直接走各自的认证助手；像微信这类基于 Gateway 的二维码渠道，则会在底层调用 Gateway 的 `web.login.start` / `web.login.wait`。
 
 ## 故障排除
 

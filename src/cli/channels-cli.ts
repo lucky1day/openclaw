@@ -7,6 +7,7 @@ import { runChannelLogin, runChannelLogout } from "./channel-auth.js";
 import { formatCliChannelOptions } from "./channel-options.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { hasExplicitOptions } from "./command-options.js";
+import { addGatewayClientOptions } from "./gateway-rpc.js";
 import { formatHelpExamples } from "./help-format.js";
 
 const optionNamesAdd = [
@@ -75,7 +76,7 @@ export function registerChannelsCli(program: Command) {
             "openclaw channels add --channel telegram --token <token>",
             "Add or update a channel account non-interactively.",
           ],
-          ["openclaw channels login --channel whatsapp", "Link a WhatsApp Web account."],
+          ["openclaw channels login --channel whatsapp", "Link a QR-capable channel account."],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink(
           "/cli/channels",
           "docs.openclaw.ai/cli/channels",
@@ -220,24 +221,29 @@ export function registerChannelsCli(program: Command) {
       });
     });
 
-  channels
-    .command("login")
-    .description("Link a channel account (if supported)")
-    .option("--channel <channel>", "Channel alias (auto when only one is configured)")
-    .option("--account <id>", "Account id (accountId)")
-    .option("--verbose", "Verbose connection logs", false)
-    .action(async (opts) => {
-      await runChannelsCommandWithDanger(async () => {
-        await runChannelLogin(
-          {
-            channel: opts.channel as string | undefined,
-            account: opts.account as string | undefined,
-            verbose: Boolean(opts.verbose),
-          },
-          defaultRuntime,
-        );
-      }, "Channel login failed");
-    });
+  addGatewayClientOptions(
+    channels
+      .command("login")
+      .description("Link a channel account (if supported)")
+      .option("--channel <channel>", "Channel alias (auto when only one is configured)")
+      .option("--account <id>", "Account id (accountId)")
+      .option("--verbose", "Verbose connection logs", false)
+      .action(async (opts) => {
+        await runChannelsCommandWithDanger(async () => {
+          await runChannelLogin(
+            {
+              channel: opts.channel as string | undefined,
+              account: opts.account as string | undefined,
+              verbose: Boolean(opts.verbose),
+              url: opts.url as string | undefined,
+              token: opts.token as string | undefined,
+              timeout: opts.timeout as string | undefined,
+            },
+            defaultRuntime,
+          );
+        }, "Channel login failed");
+      }),
+  );
 
   channels
     .command("logout")

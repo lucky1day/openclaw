@@ -24,7 +24,7 @@ const EXAMPLES = [
   ["openclaw models --help", "Show detailed help for the models command."],
   [
     "openclaw channels login --verbose",
-    "Link personal WhatsApp Web and show QR + connection logs.",
+    "Link a QR-capable channel account and show QR + connection logs.",
   ],
   [
     'openclaw message send --target +15555550123 --message "Hi" --json',
