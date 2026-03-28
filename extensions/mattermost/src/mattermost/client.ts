@@ -97,7 +97,7 @@ export function createMattermostClient(params: {
   // Null-body status codes per Fetch spec — Response constructor rejects a body for these.
   const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
 
-  const guardedFetchImpl: typeof fetch = async (input, init) => {
+  const guardedFetchImpl: MattermostClient["fetchImpl"] = async (input, init) => {
     const url =
       typeof input === "string"
         ? input
