@@ -21,9 +21,28 @@ export interface TextItem {
   text?: string;
 }
 
+export interface CDNMedia {
+  encrypt_query_param?: string;
+  aes_key?: string;
+  encrypt_type?: number;
+}
+
+export interface ImageItem {
+  media?: CDNMedia;
+  thumb_media?: CDNMedia;
+  aeskey?: string;
+  url?: string;
+  mid_size?: number;
+  thumb_size?: number;
+  thumb_height?: number;
+  thumb_width?: number;
+  hd_size?: number;
+}
+
 export interface MessageItem {
   type?: number;
   text_item?: TextItem;
+  image_item?: ImageItem;
 }
 
 export interface WeixinMessage {

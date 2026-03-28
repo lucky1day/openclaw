@@ -224,6 +224,432 @@ describe("weixin monitor", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("attaches inbound image media context while preserving text", async () => {
+    const finalizeInboundContext = vi.fn((ctx) => ctx);
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async () => {});
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("/download?")) {
+        return new Response(new Uint8Array(Buffer.from("image-bytes")), { status: 200 });
+      }
+      return jsonResponse({ ret: 0 });
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+    setWeixinRuntime({
+      channel: {
+        routing: {
+          resolveAgentRoute: vi.fn(({ accountId, peer }) => ({
+            agentId: "agent-main",
+            accountId,
+            sessionKey: `dm:${peer.id}`,
+          })),
+        },
+        session: {
+          resolveStorePath: vi.fn(() => "/tmp/weixin-session-store"),
+          readSessionUpdatedAt: vi.fn(() => 1234),
+          recordInboundSession: vi.fn(async () => {}),
+          recordSessionMetaFromInbound: vi.fn(),
+          updateLastRoute: vi.fn(),
+        },
+        reply: {
+          resolveEnvelopeFormatOptions: vi.fn(() => ({ mode: "agent" })),
+          formatAgentEnvelope: vi.fn(({ body }) => `env:${body}`),
+          finalizeInboundContext,
+          dispatchReplyWithBufferedBlockDispatcher,
+        },
+        text: {
+          resolveMarkdownTableMode: vi.fn(() => "off"),
+          convertMarkdownTables: vi.fn((text) => text),
+        },
+        commands: {
+          shouldComputeCommandAuthorized: vi.fn(() => false),
+          resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
+        },
+        pairing: {
+          readAllowFromStore: vi.fn(async () => []),
+          upsertPairingRequest: vi.fn(async () => {}),
+        },
+      },
+    } as unknown as PluginRuntime);
+
+    const { processWeixinDirectMessage } = await import("./monitor.js");
+
+    await processWeixinDirectMessage({
+      cfg: {
+        session: { store: { type: "jsonl" } },
+        commands: { useAccessGroups: true },
+      } as never,
+      account: {
+        accountId: "work",
+        enabled: true,
+        configured: true,
+        baseUrl: "https://wx.example.com",
+        token: "bot-token",
+        authFile: "/tmp/weixin-auth.json",
+        syncBufFile: "/tmp/weixin-sync.json",
+        pollIntervalMs: 1000,
+        botType: "3",
+        dmPolicy: "open",
+      } satisfies ResolvedWeixinAccount,
+      message: {
+        message_id: 108,
+        from_user_id: "wx-user-2",
+        to_user_id: "wx-bot-1",
+        create_time_ms: 1_710_000_000_001,
+        message_type: 1,
+        context_token: "ctx-token-2",
+        item_list: [
+          {
+            type: 1,
+            text_item: { text: "describe this" },
+          },
+          {
+            type: 2,
+            image_item: {
+              media: {
+                encrypt_query_param: "encrypted-image",
+              },
+            },
+          },
+        ],
+      } as never,
+      log: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      },
+    });
+
+    expect(finalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        BodyForAgent: "describe this",
+        RawBody: "describe this",
+        MediaPath: expect.stringContaining(path.sep),
+        MediaUrl: expect.stringContaining(path.sep),
+        MediaUrls: [expect.stringContaining(path.sep)],
+        MediaType: "image/*",
+        MediaTypes: ["image/*"],
+      }),
+    );
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses a media placeholder body for image-only direct messages", async () => {
+    const finalizeInboundContext = vi.fn((ctx) => ctx);
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async () => {});
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("/download?")) {
+        return new Response(new Uint8Array(Buffer.from("image-only-bytes")), { status: 200 });
+      }
+      return jsonResponse({ ret: 0 });
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+    setWeixinRuntime({
+      channel: {
+        routing: {
+          resolveAgentRoute: vi.fn(({ accountId, peer }) => ({
+            agentId: "agent-main",
+            accountId,
+            sessionKey: `dm:${peer.id}`,
+          })),
+        },
+        session: {
+          resolveStorePath: vi.fn(() => "/tmp/weixin-session-store"),
+          readSessionUpdatedAt: vi.fn(() => 1234),
+          recordInboundSession: vi.fn(async () => {}),
+          recordSessionMetaFromInbound: vi.fn(),
+          updateLastRoute: vi.fn(),
+        },
+        reply: {
+          resolveEnvelopeFormatOptions: vi.fn(() => ({ mode: "agent" })),
+          formatAgentEnvelope: vi.fn(({ body }) => `env:${body}`),
+          finalizeInboundContext,
+          dispatchReplyWithBufferedBlockDispatcher,
+        },
+        text: {
+          resolveMarkdownTableMode: vi.fn(() => "off"),
+          convertMarkdownTables: vi.fn((text) => text),
+        },
+        commands: {
+          shouldComputeCommandAuthorized: vi.fn(() => false),
+          resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
+        },
+        pairing: {
+          readAllowFromStore: vi.fn(async () => []),
+          upsertPairingRequest: vi.fn(async () => {}),
+        },
+      },
+    } as unknown as PluginRuntime);
+
+    const { processWeixinDirectMessage } = await import("./monitor.js");
+
+    await processWeixinDirectMessage({
+      cfg: {
+        session: { store: { type: "jsonl" } },
+        commands: { useAccessGroups: true },
+      } as never,
+      account: {
+        accountId: "work",
+        enabled: true,
+        configured: true,
+        baseUrl: "https://wx.example.com",
+        token: "bot-token",
+        authFile: "/tmp/weixin-auth.json",
+        syncBufFile: "/tmp/weixin-sync.json",
+        pollIntervalMs: 1000,
+        botType: "3",
+        dmPolicy: "open",
+      } satisfies ResolvedWeixinAccount,
+      message: {
+        message_id: 109,
+        from_user_id: "wx-user-3",
+        to_user_id: "wx-bot-1",
+        create_time_ms: 1_710_000_000_002,
+        message_type: 1,
+        context_token: "ctx-token-3",
+        item_list: [
+          {
+            type: 2,
+            image_item: {
+              media: {
+                encrypt_query_param: "image-only",
+              },
+            },
+          },
+        ],
+      } as never,
+      log: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      },
+    });
+
+    expect(finalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        BodyForAgent: "<media:image>",
+        RawBody: "<media:image>",
+        MediaPath: expect.stringContaining(path.sep),
+      }),
+    );
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to text-only dispatch when image download fails on a mixed message", async () => {
+    const finalizeInboundContext = vi.fn((ctx) => ctx);
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async () => {});
+    const warnLog = vi.fn();
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("/download?")) {
+        throw new Error("cdn unavailable");
+      }
+      return jsonResponse({ ret: 0 });
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+    setWeixinRuntime({
+      channel: {
+        routing: {
+          resolveAgentRoute: vi.fn(({ accountId, peer }) => ({
+            agentId: "agent-main",
+            accountId,
+            sessionKey: `dm:${peer.id}`,
+          })),
+        },
+        session: {
+          resolveStorePath: vi.fn(() => "/tmp/weixin-session-store"),
+          readSessionUpdatedAt: vi.fn(() => 1234),
+          recordInboundSession: vi.fn(async () => {}),
+          recordSessionMetaFromInbound: vi.fn(),
+          updateLastRoute: vi.fn(),
+        },
+        reply: {
+          resolveEnvelopeFormatOptions: vi.fn(() => ({ mode: "agent" })),
+          formatAgentEnvelope: vi.fn(({ body }) => `env:${body}`),
+          finalizeInboundContext,
+          dispatchReplyWithBufferedBlockDispatcher,
+        },
+        text: {
+          resolveMarkdownTableMode: vi.fn(() => "off"),
+          convertMarkdownTables: vi.fn((text) => text),
+        },
+        commands: {
+          shouldComputeCommandAuthorized: vi.fn(() => false),
+          resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
+        },
+        pairing: {
+          readAllowFromStore: vi.fn(async () => []),
+          upsertPairingRequest: vi.fn(async () => {}),
+        },
+      },
+    } as unknown as PluginRuntime);
+
+    const { processWeixinDirectMessage } = await import("./monitor.js");
+
+    await processWeixinDirectMessage({
+      cfg: {
+        session: { store: { type: "jsonl" } },
+        commands: { useAccessGroups: true },
+      } as never,
+      account: {
+        accountId: "work",
+        enabled: true,
+        configured: true,
+        baseUrl: "https://wx.example.com",
+        token: "bot-token",
+        authFile: "/tmp/weixin-auth.json",
+        syncBufFile: "/tmp/weixin-sync.json",
+        pollIntervalMs: 1000,
+        botType: "3",
+        dmPolicy: "open",
+      } satisfies ResolvedWeixinAccount,
+      message: {
+        message_id: 110,
+        from_user_id: "wx-user-4",
+        to_user_id: "wx-bot-1",
+        create_time_ms: 1_710_000_000_003,
+        message_type: 1,
+        context_token: "ctx-token-4",
+        item_list: [
+          {
+            type: 1,
+            text_item: { text: "still answer text" },
+          },
+          {
+            type: 2,
+            image_item: {
+              media: {
+                encrypt_query_param: "broken-image",
+              },
+            },
+          },
+        ],
+      } as never,
+      log: {
+        info: vi.fn(),
+        warn: warnLog,
+        error: vi.fn(),
+        debug: vi.fn(),
+      },
+    });
+
+    expect(finalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        BodyForAgent: "still answer text",
+        RawBody: "still answer text",
+      }),
+    );
+    expect(finalizeInboundContext.mock.calls[0]?.[0]).not.toHaveProperty("MediaPath");
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    expect(warnLog).toHaveBeenCalledWith(
+      expect.stringContaining("failed downloading inbound WeChat image"),
+    );
+  });
+
+  it("drops image-only messages when image download fails", async () => {
+    const finalizeInboundContext = vi.fn((ctx) => ctx);
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async () => {});
+    const debugLog = vi.fn();
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("/download?")) {
+        throw new Error("cdn unavailable");
+      }
+      return jsonResponse({ ret: 0 });
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+    setWeixinRuntime({
+      channel: {
+        routing: {
+          resolveAgentRoute: vi.fn(({ accountId, peer }) => ({
+            agentId: "agent-main",
+            accountId,
+            sessionKey: `dm:${peer.id}`,
+          })),
+        },
+        session: {
+          resolveStorePath: vi.fn(() => "/tmp/weixin-session-store"),
+          readSessionUpdatedAt: vi.fn(() => 1234),
+          recordInboundSession: vi.fn(async () => {}),
+          recordSessionMetaFromInbound: vi.fn(),
+          updateLastRoute: vi.fn(),
+        },
+        reply: {
+          resolveEnvelopeFormatOptions: vi.fn(() => ({ mode: "agent" })),
+          formatAgentEnvelope: vi.fn(({ body }) => `env:${body}`),
+          finalizeInboundContext,
+          dispatchReplyWithBufferedBlockDispatcher,
+        },
+        text: {
+          resolveMarkdownTableMode: vi.fn(() => "off"),
+          convertMarkdownTables: vi.fn((text) => text),
+        },
+        commands: {
+          shouldComputeCommandAuthorized: vi.fn(() => false),
+          resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
+        },
+        pairing: {
+          readAllowFromStore: vi.fn(async () => []),
+          upsertPairingRequest: vi.fn(async () => {}),
+        },
+      },
+    } as unknown as PluginRuntime);
+
+    const { processWeixinDirectMessage } = await import("./monitor.js");
+
+    await processWeixinDirectMessage({
+      cfg: {
+        session: { store: { type: "jsonl" } },
+        commands: { useAccessGroups: true },
+      } as never,
+      account: {
+        accountId: "work",
+        enabled: true,
+        configured: true,
+        baseUrl: "https://wx.example.com",
+        token: "bot-token",
+        authFile: "/tmp/weixin-auth.json",
+        syncBufFile: "/tmp/weixin-sync.json",
+        pollIntervalMs: 1000,
+        botType: "3",
+        dmPolicy: "open",
+      } satisfies ResolvedWeixinAccount,
+      message: {
+        message_id: 111,
+        from_user_id: "wx-user-5",
+        to_user_id: "wx-bot-1",
+        create_time_ms: 1_710_000_000_004,
+        message_type: 1,
+        context_token: "ctx-token-5",
+        item_list: [
+          {
+            type: 2,
+            image_item: {
+              media: {
+                encrypt_query_param: "broken-image-only",
+              },
+            },
+          },
+        ],
+      } as never,
+      log: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: debugLog,
+      },
+    });
+
+    expect(finalizeInboundContext).not.toHaveBeenCalled();
+    expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(debugLog).toHaveBeenCalledWith(
+      expect.stringContaining("dropping image-only WeChat DM after media download failure"),
+    );
+  });
+
   it("polls updates, persists sync buffers, and stops cleanly on abort", async () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-weixin-sync-"));
     const abortController = new AbortController();

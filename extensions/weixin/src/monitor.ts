@@ -1,3 +1,4 @@
+import { buildAgentMediaPayload, saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import {
   createChannelPairingController,
   dispatchInboundDirectDmWithRuntime,
@@ -12,6 +13,11 @@ import { isRecentWeixinInboundMessage } from "./inbound-dedupe.js";
 import { type MessageItem, MessageType, type WeixinMessage } from "./protocol.js";
 import { getWeixinRuntime } from "./runtime.js";
 import { readWeixinSyncBuf, writeWeixinSyncBuf } from "./sync-buf.js";
+import {
+  DEFAULT_WEIXIN_CDN_BASE_URL,
+  downloadWeixinInboundImage,
+  findWeixinInboundImageItem,
+} from "./weixin-inbound-image.js";
 
 type WeixinLogSink = {
   info?: (msg: string) => void;
@@ -131,7 +137,35 @@ export async function processWeixinDirectMessage(params: {
     lastInboundAt: params.message.create_time_ms ?? Date.now(),
   });
 
-  const rawBody = extractTextBody(params.message.item_list);
+  const textBody = extractTextBody(params.message.item_list);
+  let rawBody = textBody;
+  let bodyForAgent = textBody;
+  let mediaContext: Record<string, unknown> | undefined;
+  let imageDownloadFailed = false;
+  const imageItem = findWeixinInboundImageItem(params.message.item_list);
+  if (imageItem) {
+    try {
+      const inboundImage = await downloadWeixinInboundImage(imageItem, {
+        cdnBaseUrl: DEFAULT_WEIXIN_CDN_BASE_URL,
+        saveMedia: saveMediaBuffer,
+        label: `[${params.account.accountId}] inbound image`,
+      });
+      if (inboundImage) {
+        mediaContext = buildAgentMediaPayload([
+          { path: inboundImage.path, contentType: inboundImage.contentType },
+        ]);
+        if (!rawBody) {
+          rawBody = "<media:image>";
+          bodyForAgent = rawBody;
+        }
+      }
+    } catch (error) {
+      imageDownloadFailed = true;
+      params.log?.warn?.(
+        `[${params.account.accountId}] failed downloading inbound WeChat image: ${String(error)}`,
+      );
+    }
+  }
   const resolvedAccess = await resolveWeixinDirectAccess({
     cfg: params.cfg,
     account: params.account,
@@ -187,6 +221,15 @@ export async function processWeixinDirectMessage(params: {
     return;
   }
 
+  if (!rawBody && !mediaContext) {
+    if (imageDownloadFailed) {
+      params.log?.debug?.(
+        `[${params.account.accountId}] dropping image-only WeChat DM after media download failure`,
+      );
+    }
+    return;
+  }
+
   await dispatchInboundDirectDmWithRuntime({
     cfg: params.cfg,
     runtime,
@@ -199,9 +242,11 @@ export async function processWeixinDirectMessage(params: {
     recipientAddress: `weixin:${params.message.to_user_id ?? params.account.userId ?? params.account.accountId}`,
     conversationLabel: senderId,
     rawBody,
+    bodyForAgent,
     messageId: stableMessageId ?? String(Date.now()),
     timestamp: params.message.create_time_ms,
     commandAuthorized: resolvedAccess.commandAuthorized,
+    extraContext: mediaContext,
     deliver: async (payload) => {
       const runtime = getWeixinRuntime();
       const rawText =
