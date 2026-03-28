@@ -89,8 +89,10 @@ ChatGPT 账户。
 
 ### 默认传输
 
-OpenClaw 使用 `pi-ai` 进行模型流式传输。对于 `openai/*` 和
-`openai-codex/*`，默认传输都是 `"auto"`（优先 WebSocket，然后回退到 SSE）。
+OpenClaw 使用 `pi-ai` 进行模型流式传输。对于 `openai/*`，
+默认传输是 `"auto"`（优先 WebSocket，然后回退到 SSE）。对于
+`openai-codex/*`，默认传输是 `"sse"`，避免 Codex 会话先多做一次
+WebSocket 握手。
 
 你可以设置 `agents.defaults.models.<provider/model>.params.transport`：
 
@@ -115,7 +117,7 @@ OpenClaw 还会默认启用 WebSocket 预热
       models: {
         "openai-codex/gpt-5.4": {
           params: {
-            transport: "auto",
+            transport: "sse",
           },
         },
       },

@@ -70,6 +70,32 @@ function resolveLiveModelCases(raw?: string): LiveModelCase[] {
 }
 
 describe("buildOpenAIProvider", () => {
+  it("defaults Codex transport to sse and keeps explicit overrides", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    expect(
+      provider.prepareExtraParams?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.4",
+        extraParams: {},
+      } as never),
+    ).toMatchObject({
+      transport: "sse",
+    });
+
+    expect(
+      provider.prepareExtraParams?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.4",
+        extraParams: {
+          transport: "websocket",
+        },
+      } as never),
+    ).toMatchObject({
+      transport: "websocket",
+    });
+  });
+
   it("resolves gpt-5.4 mini and nano from GPT-5 small-model templates", () => {
     const provider = buildOpenAIProvider();
     const registry = {

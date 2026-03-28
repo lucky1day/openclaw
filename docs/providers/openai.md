@@ -83,9 +83,9 @@ ChatGPT account.
 
 ### Transport default
 
-OpenClaw uses `pi-ai` for model streaming. For both `openai/*` and
-`openai-codex/*`, default transport is `"auto"` (WebSocket-first, then SSE
-fallback).
+OpenClaw uses `pi-ai` for model streaming. For `openai/*`, default transport is
+`"auto"` (WebSocket-first, then SSE fallback). For `openai-codex/*`, default
+transport is `"sse"` to avoid an extra WebSocket handshake on Codex sessions.
 
 You can set `agents.defaults.models.<provider/model>.params.transport`:
 
@@ -109,7 +109,7 @@ Related OpenAI docs:
       models: {
         "openai-codex/gpt-5.4": {
           params: {
-            transport: "auto",
+            transport: "sse",
           },
         },
       },

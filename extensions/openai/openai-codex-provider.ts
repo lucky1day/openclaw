@@ -251,7 +251,7 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
       }
       return {
         ...ctx.extraParams,
-        transport: "auto",
+        transport: "sse",
       };
     },
     wrapStreamFn: (ctx) => createOpenAIAttributionHeadersWrapper(ctx.streamFn),

@@ -179,7 +179,7 @@ OpenClaw 附带 pi‑ai 目录。这些提供商**不需要**
 - 身份验证：OAuth（ChatGPT）
 - 示例模型：`openai-codex/gpt-5.4`
 - CLI：`openclaw onboard --auth-choice openai-codex` 或 `openclaw models auth login --provider openai-codex`
-- 默认传输为 `auto`（优先 WebSocket，SSE 回退）
+- 默认传输为 `sse`
 - 通过 `agents.defaults.models["openai-codex/<model>"].params.transport` 按模型覆盖（`"sse"`、`"websocket"` 或 `"auto"`）
 - 与直接 `openai/*` 共享相同的 `/fast` 开关和 `params.fastMode` 配置
 - 当 Codex OAuth 目录暴露它时，`openai-codex/gpt-5.3-codex-spark` 仍然可用；取决于 entitlement

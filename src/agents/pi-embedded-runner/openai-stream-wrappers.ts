@@ -393,7 +393,7 @@ export function createCodexDefaultTransportWrapper(baseStreamFn: StreamFn | unde
   return (model, context, options) =>
     underlying(model, context, {
       ...options,
-      transport: options?.transport ?? "auto",
+      transport: options?.transport ?? "sse",
     });
 }
 

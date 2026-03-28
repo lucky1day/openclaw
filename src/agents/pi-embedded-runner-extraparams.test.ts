@@ -50,7 +50,7 @@ beforeEach(() => {
       }
       return {
         ...params.context.extraParams,
-        transport: "auto",
+        transport: "sse",
       };
     },
     wrapProviderStreamFn: (params) => {
@@ -1332,7 +1332,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.transport).toBe("websocket");
   });
 
-  it("defaults Codex transport to auto (WebSocket-first)", () => {
+  it("defaults Codex transport to sse", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
     applyExtraParamsToAgent(agent, undefined, "openai-codex", "gpt-5.4");
@@ -1346,7 +1346,7 @@ describe("applyExtraParamsToAgent", () => {
     void agent.streamFn?.(model, context, {});
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.transport).toBe("auto");
+    expect(calls[0]?.transport).toBe("sse");
   });
 
   it("defaults OpenAI transport to auto without websocket warm-up", () => {
@@ -1533,7 +1533,7 @@ describe("applyExtraParamsToAgent", () => {
     void agent.streamFn?.(model, context, {});
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.transport).toBe("auto");
+    expect(calls[0]?.transport).toBe("sse");
   });
 
   it("returns prepared Codex transport defaults for runtime sessions", () => {
@@ -1543,7 +1543,7 @@ describe("applyExtraParamsToAgent", () => {
       modelId: "gpt-5.4",
     });
 
-    expect(effectiveExtraParams.transport).toBe("auto");
+    expect(effectiveExtraParams.transport).toBe("sse");
   });
 
   it("uses prepared transport when session settings did not explicitly set one", () => {
@@ -1561,7 +1561,7 @@ describe("applyExtraParamsToAgent", () => {
         },
         effectiveExtraParams,
       }),
-    ).toBe("auto");
+    ).toBe("sse");
   });
 
   it("keeps explicit session transport over prepared OpenAI defaults", () => {
