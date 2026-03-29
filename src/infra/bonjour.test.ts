@@ -6,10 +6,18 @@ const mocks = vi.hoisted(() => ({
   createService: vi.fn(),
   shutdown: vi.fn(),
   registerUnhandledRejectionHandler: vi.fn(),
+  registerUncaughtExceptionHandler: vi.fn(),
   logWarn: vi.fn(),
   logDebug: vi.fn(),
 }));
-const { createService, shutdown, registerUnhandledRejectionHandler, logWarn, logDebug } = mocks;
+const {
+  createService,
+  shutdown,
+  registerUnhandledRejectionHandler,
+  registerUncaughtExceptionHandler,
+  logWarn,
+  logDebug,
+} = mocks;
 const getLoggerInfo = vi.fn();
 
 const asString = (value: unknown, fallback: string) =>
@@ -83,6 +91,8 @@ vi.mock("./unhandled-rejections.js", () => {
   return {
     registerUnhandledRejectionHandler: (handler: (reason: unknown) => boolean) =>
       registerUnhandledRejectionHandler(handler),
+    registerUncaughtExceptionHandler: (handler: (reason: unknown) => boolean) =>
+      registerUncaughtExceptionHandler(handler),
   };
 });
 
@@ -117,6 +127,7 @@ describe("gateway bonjour advertiser", () => {
     createService.mockClear();
     shutdown.mockClear();
     registerUnhandledRejectionHandler.mockClear();
+    registerUncaughtExceptionHandler.mockClear();
     logWarn.mockClear();
     logDebug.mockClear();
     vi.useRealTimers();
@@ -227,7 +238,11 @@ describe("gateway bonjour advertiser", () => {
     const cleanup = vi.fn(() => {
       order.push("cleanup");
     });
+    const cleanupUncaught = vi.fn(() => {
+      order.push("cleanup-uncaught");
+    });
     registerUnhandledRejectionHandler.mockImplementation(() => cleanup);
+    registerUncaughtExceptionHandler.mockImplementation(() => cleanupUncaught);
 
     const started = await startGatewayBonjourAdvertiser({
       gatewayPort: 18789,
@@ -237,8 +252,10 @@ describe("gateway bonjour advertiser", () => {
     await started.stop();
 
     expect(registerUnhandledRejectionHandler).toHaveBeenCalledTimes(1);
+    expect(registerUncaughtExceptionHandler).toHaveBeenCalledTimes(1);
     expect(cleanup).toHaveBeenCalledTimes(1);
-    expect(order).toEqual(["shutdown", "cleanup"]);
+    expect(cleanupUncaught).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(["shutdown", "cleanup", "cleanup-uncaught"]);
   });
 
   it("logs ciao handler classifications at the bonjour caller", async () => {
@@ -270,6 +287,48 @@ describe("gateway bonjour advertiser", () => {
     expect(logWarn).toHaveBeenCalledWith(
       expect.stringContaining("suppressing ciao interface assertion"),
     );
+
+    await started.stop();
+  });
+
+  it("suppresses known ciao uncaught exceptions and disables advertising", async () => {
+    enableAdvertiserUnitMode();
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+
+    const started = await startGatewayBonjourAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    const handler = registerUncaughtExceptionHandler.mock.calls[0]?.[0] as
+      | ((reason: unknown) => boolean)
+      | undefined;
+    expect(handler).toBeTypeOf("function");
+
+    const error = Object.assign(
+      new Error(
+        "IP address version must match. Netmask cannot have a version different from the address!",
+      ),
+      {
+        name: "AssertionError",
+        stack:
+          "AssertionError: IP address version must match. Netmask cannot have a version different from the address!\n" +
+          "    at getNetAddress (/Users/jiajie/dev/openclaw/node_modules/@homebridge/ciao/src/util/domain-formatter.ts:273:9)\n" +
+          "    at MDNSServer.handleMessage (/Users/jiajie/dev/openclaw/node_modules/@homebridge/ciao/src/MDNSServer.ts:587:42)",
+      },
+    );
+
+    expect(handler?.(error)).toBe(true);
+    expect(logWarn).toHaveBeenCalledWith(
+      expect.stringContaining("suppressing ciao uncaught exception"),
+    );
+    await vi.waitFor(() => {
+      expect(destroy).toHaveBeenCalledTimes(1);
+      expect(shutdown).toHaveBeenCalledTimes(1);
+    });
 
     await started.stop();
   });

@@ -1,6 +1,10 @@
 import process from "node:process";
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
-import { installUnhandledRejectionHandler } from "./unhandled-rejections.js";
+import {
+  installUnhandledRejectionHandler,
+  installUncaughtExceptionHandler,
+  registerUncaughtExceptionHandler,
+} from "./unhandled-rejections.js";
 
 describe("installUnhandledRejectionHandler - fatal detection", () => {
   let exitCalls: Array<string | number | null> = [];
@@ -11,6 +15,7 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
   beforeAll(() => {
     originalExit = process.exit.bind(process);
     installUnhandledRejectionHandler();
+    installUncaughtExceptionHandler();
   });
 
   beforeEach(() => {
@@ -39,6 +44,10 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
 
   function emitUnhandled(reason: unknown): void {
     process.emit("unhandledRejection", reason, Promise.resolve());
+  }
+
+  function emitUncaught(error: unknown): void {
+    process.emit("uncaughtException", error);
   }
 
   function expectExitCodeFromUnhandled(reason: unknown, expected: number[]): void {
@@ -156,6 +165,18 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
         "[openclaw] Suppressed AbortError:",
         expect.stringContaining("This operation was aborted"),
       );
+    });
+
+    it("does not exit on registered handled uncaught exceptions", () => {
+      const cleanup = registerUncaughtExceptionHandler(
+        (error) => error instanceof Error && error.message === "known-ciao",
+      );
+
+      exitCalls = [];
+      emitUncaught(new Error("known-ciao"));
+      expect(exitCalls).toEqual([]);
+
+      cleanup();
     });
   });
 });

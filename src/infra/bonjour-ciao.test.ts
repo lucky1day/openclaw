@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-const { classifyCiaoUnhandledRejection, ignoreCiaoUnhandledRejection } =
-  await import("./bonjour-ciao.js");
+const {
+  classifyCiaoUnhandledRejection,
+  classifyCiaoUncaughtException,
+  ignoreCiaoUnhandledRejection,
+  ignoreCiaoUncaughtException,
+} = await import("./bonjour-ciao.js");
 
 describe("bonjour-ciao", () => {
   it("classifies ciao cancellation rejections separately from side effects", () => {
@@ -43,6 +47,44 @@ describe("bonjour-ciao", () => {
     );
 
     expect(ignoreCiaoUnhandledRejection(error)).toBe(true);
+  });
+
+  it("classifies ciao netmask assertions from uncaught exceptions", () => {
+    const error = Object.assign(
+      new Error(
+        "IP address version must match. Netmask cannot have a version different from the address!",
+      ),
+      {
+        name: "AssertionError",
+        stack:
+          "AssertionError: IP address version must match. Netmask cannot have a version different from the address!\n" +
+          "    at getNetAddress (/Users/jiajie/dev/openclaw/node_modules/@homebridge/ciao/src/util/domain-formatter.ts:273:9)\n" +
+          "    at MDNSServer.handleMessage (/Users/jiajie/dev/openclaw/node_modules/@homebridge/ciao/src/MDNSServer.ts:587:42)",
+      },
+    );
+
+    expect(classifyCiaoUncaughtException(error)).toEqual({
+      kind: "netmask-assertion",
+      formatted:
+        "AssertionError: IP address version must match. Netmask cannot have a version different from the address!",
+    });
+  });
+
+  it("suppresses ciao netmask assertions as non-fatal uncaught exceptions", () => {
+    const error = Object.assign(
+      new Error(
+        "IP address version must match. Netmask cannot have a version different from the address!",
+      ),
+      {
+        name: "AssertionError",
+        stack:
+          "AssertionError: IP address version must match. Netmask cannot have a version different from the address!\n" +
+          "    at getNetAddress (/Users/jiajie/dev/openclaw/node_modules/@homebridge/ciao/src/util/domain-formatter.ts:273:9)\n" +
+          "    at MDNSServer.handleMessage (/Users/jiajie/dev/openclaw/node_modules/@homebridge/ciao/src/MDNSServer.ts:587:42)",
+      },
+    );
+
+    expect(ignoreCiaoUncaughtException(error)).toBe(true);
   });
 
   it("keeps unrelated rejections visible", () => {

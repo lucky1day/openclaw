@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { isAbortError, isTransientNetworkError } from "./unhandled-rejections.js";
+import {
+  isAbortError,
+  isTransientNetworkError,
+  isUncaughtExceptionHandled,
+  registerUncaughtExceptionHandler,
+} from "./unhandled-rejections.js";
 
 describe("isAbortError", () => {
   it("returns true for error with name AbortError", () => {
@@ -185,5 +190,19 @@ describe("isTransientNetworkError", () => {
   it("returns false for AggregateError with only non-network errors", () => {
     const error = new AggregateError([new Error("regular error")], "Multiple errors");
     expect(isTransientNetworkError(error)).toBe(false);
+  });
+});
+
+describe("uncaught exception handlers", () => {
+  it("reports handled uncaught exceptions only while the handler is registered", () => {
+    const cleanup = registerUncaughtExceptionHandler((error) => {
+      return error instanceof Error && error.message === "known-ciao";
+    });
+
+    expect(isUncaughtExceptionHandled(new Error("known-ciao"))).toBe(true);
+
+    cleanup();
+
+    expect(isUncaughtExceptionHandled(new Error("known-ciao"))).toBe(false);
   });
 });

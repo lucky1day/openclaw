@@ -1,9 +1,12 @@
 import { logDebug, logWarn } from "../logger.js";
 import { getLogger } from "../logging.js";
-import { classifyCiaoUnhandledRejection } from "./bonjour-ciao.js";
+import { classifyCiaoUnhandledRejection, classifyCiaoUncaughtException } from "./bonjour-ciao.js";
 import { formatBonjourError } from "./bonjour-errors.js";
 import { isTruthyEnvValue } from "./env.js";
-import { registerUnhandledRejectionHandler } from "./unhandled-rejections.js";
+import {
+  registerUnhandledRejectionHandler,
+  registerUncaughtExceptionHandler,
+} from "./unhandled-rejections.js";
 
 export type GatewayBonjourAdvertiser = {
   stop: () => Promise<void>;
@@ -55,7 +58,6 @@ type BonjourServiceState = BonjourService["serviceState"];
 type BonjourCycle = {
   responder: BonjourResponder;
   services: Array<{ label: string; svc: BonjourService }>;
-  cleanupUnhandledRejection?: () => void;
 };
 
 type ServiceStateTracker = {
@@ -184,13 +186,7 @@ export async function startGatewayBonjourAdvertiser(
       label: "gateway",
       svc: gateway as unknown as BonjourService,
     });
-
-    const cleanupUnhandledRejection =
-      services.length > 0
-        ? registerUnhandledRejectionHandler(handleCiaoUnhandledRejection)
-        : undefined;
-
-    return { responder, services, cleanupUnhandledRejection };
+    return { responder, services };
   }
 
   async function stopCycle(cycle: BonjourCycle | null) {
@@ -222,8 +218,6 @@ export async function startGatewayBonjourAdvertiser(
       await cycle.responder.shutdown();
     } catch {
       /* ignore */
-    } finally {
-      cycle.cleanupUnhandledRejection?.();
     }
   }
 
@@ -275,11 +269,25 @@ export async function startGatewayBonjourAdvertiser(
   );
 
   let stopped = false;
+  let disabled = false;
   let recreatePromise: Promise<void> | null = null;
-  let cycle = createCycle();
+  let cycle: BonjourCycle | null = createCycle();
+  let cleanupUnhandledRejection: (() => void) | null = registerUnhandledRejectionHandler(
+    handleCiaoUnhandledRejection,
+  );
+  let cleanupUncaughtException: (() => void) | null = registerUncaughtExceptionHandler(
+    handleCiaoUncaughtException,
+  );
   const stateTracker = new Map<string, ServiceStateTracker>();
   attachConflictListeners(cycle.services);
   startAdvertising(cycle.services);
+
+  const cleanupBonjourHandlers = () => {
+    cleanupUnhandledRejection?.();
+    cleanupUnhandledRejection = null;
+    cleanupUncaughtException?.();
+    cleanupUncaughtException = null;
+  };
 
   const updateStateTrackers = (services: Array<{ label: string; svc: BonjourService }>) => {
     const now = Date.now();
@@ -298,7 +306,7 @@ export async function startGatewayBonjourAdvertiser(
   };
 
   const recreateAdvertiser = async (reason: string) => {
-    if (stopped) {
+    if (stopped || disabled) {
       return;
     }
     if (recreatePromise) {
@@ -307,6 +315,9 @@ export async function startGatewayBonjourAdvertiser(
     recreatePromise = (async () => {
       logWarn(`bonjour: restarting advertiser (${reason})`);
       const previous = cycle;
+      if (!previous) {
+        return;
+      }
       await stopCycle(previous);
       cycle = createCycle();
       stateTracker.clear();
@@ -318,11 +329,43 @@ export async function startGatewayBonjourAdvertiser(
     return recreatePromise;
   };
 
+  const disableAdvertiser = async (reason: string) => {
+    if (stopped || disabled) {
+      return;
+    }
+    disabled = true;
+    logWarn(`bonjour: disabling advertiser (${reason})`);
+    const previous = cycle;
+    if (!previous) {
+      return;
+    }
+    cycle = null;
+    stateTracker.clear();
+    await stopCycle(previous);
+    cleanupBonjourHandlers();
+  };
+
+  function handleCiaoUncaughtException(reason: unknown): boolean {
+    const classification = classifyCiaoUncaughtException(reason);
+    if (!classification) {
+      return false;
+    }
+    logWarn(`bonjour: suppressing ciao uncaught exception: ${classification.formatted}`);
+    void disableAdvertiser(classification.kind);
+    return true;
+  }
+
   // Watchdog: if we ever end up in an unannounced state (e.g. after sleep/wake or
   // interface churn), try to re-advertise instead of requiring a full gateway restart.
   const lastRepairAttempt = new Map<string, number>();
   const watchdog = setInterval(() => {
     if (stopped || recreatePromise) {
+      return;
+    }
+    if (disabled) {
+      return;
+    }
+    if (!cycle) {
       return;
     }
     updateStateTrackers(cycle.services);
@@ -389,6 +432,7 @@ export async function startGatewayBonjourAdvertiser(
       clearInterval(watchdog);
       await recreatePromise;
       await stopCycle(cycle);
+      cleanupBonjourHandlers();
     },
   };
 }

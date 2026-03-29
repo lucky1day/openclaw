@@ -7,8 +7,12 @@ import {
 } from "./errors.js";
 
 type UnhandledRejectionHandler = (reason: unknown) => boolean;
+type UncaughtExceptionHandler = (error: unknown) => boolean;
 
 const handlers = new Set<UnhandledRejectionHandler>();
+const uncaughtExceptionHandlers = new Set<UncaughtExceptionHandler>();
+let unhandledRejectionInstalled = false;
+let uncaughtExceptionInstalled = false;
 
 const FATAL_ERROR_CODES = new Set([
   "ERR_OUT_OF_MEMORY",
@@ -202,6 +206,13 @@ export function registerUnhandledRejectionHandler(handler: UnhandledRejectionHan
   };
 }
 
+export function registerUncaughtExceptionHandler(handler: UncaughtExceptionHandler): () => void {
+  uncaughtExceptionHandlers.add(handler);
+  return () => {
+    uncaughtExceptionHandlers.delete(handler);
+  };
+}
+
 export function isUnhandledRejectionHandled(reason: unknown): boolean {
   for (const handler of handlers) {
     try {
@@ -218,7 +229,27 @@ export function isUnhandledRejectionHandled(reason: unknown): boolean {
   return false;
 }
 
+export function isUncaughtExceptionHandled(error: unknown): boolean {
+  for (const handler of uncaughtExceptionHandlers) {
+    try {
+      if (handler(error)) {
+        return true;
+      }
+    } catch (handlerError) {
+      console.error(
+        "[openclaw] Uncaught exception handler failed:",
+        handlerError instanceof Error ? (handlerError.stack ?? handlerError.message) : handlerError,
+      );
+    }
+  }
+  return false;
+}
+
 export function installUnhandledRejectionHandler(): void {
+  if (unhandledRejectionInstalled) {
+    return;
+  }
+  unhandledRejectionInstalled = true;
   process.on("unhandledRejection", (reason, _promise) => {
     if (isUnhandledRejectionHandled(reason)) {
       return;
@@ -252,6 +283,20 @@ export function installUnhandledRejectionHandler(): void {
     }
 
     console.error("[openclaw] Unhandled promise rejection:", formatUncaughtError(reason));
+    process.exit(1);
+  });
+}
+
+export function installUncaughtExceptionHandler(): void {
+  if (uncaughtExceptionInstalled) {
+    return;
+  }
+  uncaughtExceptionInstalled = true;
+  process.on("uncaughtException", (error) => {
+    if (isUncaughtExceptionHandled(error)) {
+      return;
+    }
+    console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
     process.exit(1);
   });
 }
