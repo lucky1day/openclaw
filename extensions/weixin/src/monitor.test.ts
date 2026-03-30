@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createStartAccountContext } from "../../../test/helpers/extensions/start-account-context.js";
 import { resetWeixinAccountLocksForTest } from "./account-lock.js";
 import type { ResolvedWeixinAccount } from "./accounts.js";
+import { resetWeixinConfigManagersForTest } from "./config-cache.js";
 import { resetWeixinInboundDedupe } from "./inbound-dedupe.js";
 import { setWeixinRuntime } from "./runtime.js";
 
@@ -17,9 +18,14 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+function callUrl(call: unknown[]): string {
+  return String(call[0] ?? "");
+}
+
 afterEach(async () => {
   vi.unstubAllGlobals();
   resetWeixinInboundDedupe();
+  resetWeixinConfigManagersForTest();
   await resetWeixinAccountLocksForTest();
   await drainFileLockStateForTest();
 });
@@ -113,9 +119,16 @@ describe("weixin monitor", () => {
 
     expect(recordInboundSession).toHaveBeenCalledTimes(1);
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(
+      fetchMock.mock.calls.filter((call) => callUrl(call).includes("ilink/bot/getconfig")),
+    ).toHaveLength(1);
+    expect(
+      fetchMock.mock.calls.filter((call) => callUrl(call).includes("ilink/bot/sendmessage")),
+    ).toHaveLength(1);
 
-    const [requestUrl, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const [requestUrl, requestInit] = fetchMock.mock.calls.find((call) =>
+      callUrl(call).includes("ilink/bot/sendmessage"),
+    ) as unknown as [string, RequestInit];
     expect(requestUrl).toContain("ilink/bot/sendmessage");
     const body = JSON.parse(String(requestInit.body)) as {
       msg?: {
@@ -127,6 +140,397 @@ describe("weixin monitor", () => {
     expect(body.msg?.to_user_id).toBe("wx-user-1");
     expect(body.msg?.context_token).toBe("ctx-token-1");
     expect(body.msg?.item_list?.[0]?.text_item?.text).toBe("reply");
+  });
+
+  it("sends typing start pulses and a final cancel using a cached typing ticket", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.includes("ilink/bot/getconfig")) {
+        return jsonResponse({ ret: 0, typing_ticket: "typing-ticket-1" });
+      }
+      if (url.includes("ilink/bot/sendtyping")) {
+        return jsonResponse({ ret: 0 });
+      }
+      if (url.includes("ilink/bot/sendmessage")) {
+        return jsonResponse({ ret: 0 });
+      }
+      throw new Error(`unexpected fetch: ${url} body=${String(init?.body ?? "")}`);
+    });
+
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(
+      async ({
+        dispatcherOptions,
+        replyOptions,
+      }: {
+        dispatcherOptions: { deliver: (payload: { text?: string }) => Promise<void> };
+        replyOptions?: {
+          onReplyStart?: () => Promise<void>;
+          onTypingCleanup?: () => void;
+        };
+      }) => {
+        await replyOptions?.onReplyStart?.();
+        await replyOptions?.onReplyStart?.();
+        await dispatcherOptions.deliver({ text: "reply with typing" });
+        replyOptions?.onTypingCleanup?.();
+        await Promise.resolve();
+        await Promise.resolve();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      },
+    );
+
+    vi.stubGlobal("fetch", fetchMock);
+    setWeixinRuntime({
+      channel: {
+        routing: {
+          resolveAgentRoute: vi.fn(({ accountId, peer }) => ({
+            agentId: "agent-main",
+            accountId,
+            sessionKey: `dm:${peer.id}`,
+          })),
+        },
+        session: {
+          resolveStorePath: vi.fn(() => "/tmp/weixin-session-store"),
+          readSessionUpdatedAt: vi.fn(() => 1234),
+          recordInboundSession: vi.fn(async () => {}),
+          recordSessionMetaFromInbound: vi.fn(),
+          updateLastRoute: vi.fn(),
+        },
+        reply: {
+          resolveEnvelopeFormatOptions: vi.fn(() => ({ mode: "agent" })),
+          formatAgentEnvelope: vi.fn(({ body }) => `env:${body}`),
+          finalizeInboundContext: vi.fn((ctx) => ctx),
+          dispatchReplyWithBufferedBlockDispatcher,
+        },
+        text: {
+          resolveMarkdownTableMode: vi.fn(() => "off"),
+          convertMarkdownTables: vi.fn((text) => text),
+        },
+        commands: {
+          shouldComputeCommandAuthorized: vi.fn(() => false),
+          resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
+        },
+        pairing: {
+          readAllowFromStore: vi.fn(async () => []),
+          upsertPairingRequest: vi.fn(async () => {}),
+        },
+      },
+    } as unknown as PluginRuntime);
+
+    const { processWeixinDirectMessage } = await import("./monitor.js");
+
+    await processWeixinDirectMessage({
+      cfg: {
+        session: { store: { type: "jsonl" } },
+        commands: { useAccessGroups: true },
+      } as never,
+      account: {
+        accountId: "work",
+        enabled: true,
+        configured: true,
+        baseUrl: "https://wx.example.com",
+        token: "bot-token",
+        authFile: "/tmp/weixin-auth.json",
+        syncBufFile: "/tmp/weixin-sync.json",
+        pollIntervalMs: 1000,
+        botType: "3",
+        dmPolicy: "open",
+      } satisfies ResolvedWeixinAccount,
+      message: {
+        message_id: 43,
+        from_user_id: "wx-user-typing",
+        to_user_id: "wx-bot-1",
+        create_time_ms: 1_710_000_000_010,
+        message_type: 1,
+        context_token: "ctx-token-typing",
+        item_list: [
+          {
+            type: 1,
+            text_item: { text: "hello with typing" },
+          },
+        ],
+      },
+      log: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      },
+    });
+
+    const typingCalls = fetchMock.mock.calls.filter((call) =>
+      callUrl(call).includes("ilink/bot/sendtyping"),
+    );
+    const typingStatuses = typingCalls.map(([, init]) => {
+      const body = JSON.parse(String((init as RequestInit | undefined)?.body ?? "{}")) as {
+        status?: number;
+      };
+      return body.status;
+    });
+
+    expect(
+      fetchMock.mock.calls.filter((call) => callUrl(call).includes("ilink/bot/getconfig")),
+    ).toHaveLength(1);
+    expect(typingStatuses).toEqual([1, 1, 2]);
+    expect(
+      fetchMock.mock.calls.filter((call) => callUrl(call).includes("ilink/bot/sendmessage")),
+    ).toHaveLength(1);
+  });
+
+  it("does not block reply dispatch while getConfig is still pending", async () => {
+    let resolveConfig: (() => void) | undefined;
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("ilink/bot/getconfig")) {
+        await new Promise<void>((resolve) => {
+          resolveConfig = resolve;
+        });
+        return jsonResponse({ ret: 0, typing_ticket: "typing-ticket-slow" });
+      }
+      if (url.includes("ilink/bot/sendtyping")) {
+        return jsonResponse({ ret: 0 });
+      }
+      if (url.includes("ilink/bot/sendmessage")) {
+        return jsonResponse({ ret: 0 });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(
+      async ({
+        dispatcherOptions,
+        replyOptions,
+      }: {
+        dispatcherOptions: { deliver: (payload: { text?: string }) => Promise<void> };
+        replyOptions?: {
+          onReplyStart?: () => Promise<void>;
+          onTypingCleanup?: () => void;
+        };
+      }) => {
+        let settled = false;
+        const startPromise = replyOptions?.onReplyStart?.();
+        void startPromise?.then(() => {
+          settled = true;
+        });
+        await Promise.resolve();
+        expect(settled).toBe(true);
+        await dispatcherOptions.deliver({ text: "reply before config resolves" });
+        resolveConfig?.();
+        await Promise.resolve();
+        await Promise.resolve();
+        replyOptions?.onTypingCleanup?.();
+        await Promise.resolve();
+        await Promise.resolve();
+      },
+    );
+
+    vi.stubGlobal("fetch", fetchMock);
+    setWeixinRuntime({
+      channel: {
+        routing: {
+          resolveAgentRoute: vi.fn(({ accountId, peer }) => ({
+            agentId: "agent-main",
+            accountId,
+            sessionKey: `dm:${peer.id}`,
+          })),
+        },
+        session: {
+          resolveStorePath: vi.fn(() => "/tmp/weixin-session-store"),
+          readSessionUpdatedAt: vi.fn(() => 1234),
+          recordInboundSession: vi.fn(async () => {}),
+          recordSessionMetaFromInbound: vi.fn(),
+          updateLastRoute: vi.fn(),
+        },
+        reply: {
+          resolveEnvelopeFormatOptions: vi.fn(() => ({ mode: "agent" })),
+          formatAgentEnvelope: vi.fn(({ body }) => `env:${body}`),
+          finalizeInboundContext: vi.fn((ctx) => ctx),
+          dispatchReplyWithBufferedBlockDispatcher,
+        },
+        text: {
+          resolveMarkdownTableMode: vi.fn(() => "off"),
+          convertMarkdownTables: vi.fn((text) => text),
+        },
+        commands: {
+          shouldComputeCommandAuthorized: vi.fn(() => false),
+          resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
+        },
+        pairing: {
+          readAllowFromStore: vi.fn(async () => []),
+          upsertPairingRequest: vi.fn(async () => {}),
+        },
+      },
+    } as unknown as PluginRuntime);
+
+    const { processWeixinDirectMessage } = await import("./monitor.js");
+
+    await processWeixinDirectMessage({
+      cfg: {
+        session: { store: { type: "jsonl" } },
+        commands: { useAccessGroups: true },
+      } as never,
+      account: {
+        accountId: "work",
+        enabled: true,
+        configured: true,
+        baseUrl: "https://wx.example.com",
+        token: "bot-token",
+        authFile: "/tmp/weixin-auth.json",
+        syncBufFile: "/tmp/weixin-sync.json",
+        pollIntervalMs: 1000,
+        botType: "3",
+        dmPolicy: "open",
+      } satisfies ResolvedWeixinAccount,
+      message: {
+        message_id: 44,
+        from_user_id: "wx-user-nonblocking",
+        to_user_id: "wx-bot-1",
+        create_time_ms: 1_710_000_000_020,
+        message_type: 1,
+        context_token: "ctx-token-nonblocking",
+        item_list: [
+          {
+            type: 1,
+            text_item: { text: "hello non blocking typing" },
+          },
+        ],
+      },
+      log: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      },
+    });
+
+    expect(
+      fetchMock.mock.calls.filter((call) => callUrl(call).includes("ilink/bot/getconfig")),
+    ).toHaveLength(1);
+    expect(
+      fetchMock.mock.calls.filter((call) => callUrl(call).includes("ilink/bot/sendmessage")),
+    ).toHaveLength(1);
+  });
+
+  it("does not send a late typing indicator after cleanup if config resolves too late", async () => {
+    let resolveConfig: (() => void) | undefined;
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("ilink/bot/getconfig")) {
+        await new Promise<void>((resolve) => {
+          resolveConfig = resolve;
+        });
+        return jsonResponse({ ret: 0, typing_ticket: "typing-ticket-late" });
+      }
+      if (url.includes("ilink/bot/sendtyping")) {
+        return jsonResponse({ ret: 0 });
+      }
+      if (url.includes("ilink/bot/sendmessage")) {
+        return jsonResponse({ ret: 0 });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(
+      async ({
+        dispatcherOptions,
+        replyOptions,
+      }: {
+        dispatcherOptions: { deliver: (payload: { text?: string }) => Promise<void> };
+        replyOptions?: {
+          onReplyStart?: () => Promise<void>;
+          onTypingCleanup?: () => void;
+        };
+      }) => {
+        await replyOptions?.onReplyStart?.();
+        await dispatcherOptions.deliver({ text: "reply before cleanup" });
+        replyOptions?.onTypingCleanup?.();
+        resolveConfig?.();
+        await Promise.resolve();
+        await Promise.resolve();
+      },
+    );
+
+    vi.stubGlobal("fetch", fetchMock);
+    setWeixinRuntime({
+      channel: {
+        routing: {
+          resolveAgentRoute: vi.fn(({ accountId, peer }) => ({
+            agentId: "agent-main",
+            accountId,
+            sessionKey: `dm:${peer.id}`,
+          })),
+        },
+        session: {
+          resolveStorePath: vi.fn(() => "/tmp/weixin-session-store"),
+          readSessionUpdatedAt: vi.fn(() => 1234),
+          recordInboundSession: vi.fn(async () => {}),
+          recordSessionMetaFromInbound: vi.fn(),
+          updateLastRoute: vi.fn(),
+        },
+        reply: {
+          resolveEnvelopeFormatOptions: vi.fn(() => ({ mode: "agent" })),
+          formatAgentEnvelope: vi.fn(({ body }) => `env:${body}`),
+          finalizeInboundContext: vi.fn((ctx) => ctx),
+          dispatchReplyWithBufferedBlockDispatcher,
+        },
+        text: {
+          resolveMarkdownTableMode: vi.fn(() => "off"),
+          convertMarkdownTables: vi.fn((text) => text),
+        },
+        commands: {
+          shouldComputeCommandAuthorized: vi.fn(() => false),
+          resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
+        },
+        pairing: {
+          readAllowFromStore: vi.fn(async () => []),
+          upsertPairingRequest: vi.fn(async () => {}),
+        },
+      },
+    } as unknown as PluginRuntime);
+
+    const { processWeixinDirectMessage } = await import("./monitor.js");
+
+    await processWeixinDirectMessage({
+      cfg: {
+        session: { store: { type: "jsonl" } },
+        commands: { useAccessGroups: true },
+      } as never,
+      account: {
+        accountId: "work",
+        enabled: true,
+        configured: true,
+        baseUrl: "https://wx.example.com",
+        token: "bot-token",
+        authFile: "/tmp/weixin-auth.json",
+        syncBufFile: "/tmp/weixin-sync.json",
+        pollIntervalMs: 1000,
+        botType: "3",
+        dmPolicy: "open",
+      } satisfies ResolvedWeixinAccount,
+      message: {
+        message_id: 45,
+        from_user_id: "wx-user-no-late-typing",
+        to_user_id: "wx-bot-1",
+        create_time_ms: 1_710_000_000_030,
+        message_type: 1,
+        context_token: "ctx-token-no-late-typing",
+        item_list: [
+          {
+            type: 1,
+            text_item: { text: "hello no late typing" },
+          },
+        ],
+      },
+      log: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      },
+    });
+
+    expect(
+      fetchMock.mock.calls.filter((call) => callUrl(call).includes("ilink/bot/sendtyping")),
+    ).toHaveLength(0);
+    expect(
+      fetchMock.mock.calls.filter((call) => callUrl(call).includes("ilink/bot/sendmessage")),
+    ).toHaveLength(1);
   });
 
   it("deduplicates repeated inbound WeChat message ids", async () => {
@@ -221,7 +625,12 @@ describe("weixin monitor", () => {
 
     expect(recordInboundSession).toHaveBeenCalledTimes(1);
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(
+      fetchMock.mock.calls.filter((call) => callUrl(call).includes("ilink/bot/getconfig")),
+    ).toHaveLength(1);
+    expect(
+      fetchMock.mock.calls.filter((call) => callUrl(call).includes("ilink/bot/sendmessage")),
+    ).toHaveLength(1);
   });
 
   it("attaches inbound image media context while preserving text", async () => {

@@ -14,6 +14,22 @@ import type { GetReplyOptions } from "./types.js";
 
 export type DispatchInboundResult = DispatchFromConfigResult;
 
+function mergeReplyOptions<T extends Record<string, unknown>>(
+  base?: T,
+  overrides?: T,
+): T | undefined {
+  if (!base && !overrides) {
+    return undefined;
+  }
+  const merged: Record<string, unknown> = { ...base };
+  for (const [key, value] of Object.entries(overrides ?? {})) {
+    if (value !== undefined) {
+      merged[key] = value;
+    }
+  }
+  return merged as T;
+}
+
 export async function withReplyDispatcher<T>(params: {
   dispatcher: ReplyDispatcher;
   run: () => Promise<T>;
@@ -69,10 +85,7 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
       cfg: params.cfg,
       dispatcher,
       replyResolver: params.replyResolver,
-      replyOptions: {
-        ...params.replyOptions,
-        ...replyOptions,
-      },
+      replyOptions: mergeReplyOptions(params.replyOptions, replyOptions),
     });
   } finally {
     markDispatchIdle();

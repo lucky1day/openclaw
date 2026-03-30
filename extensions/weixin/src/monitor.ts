@@ -8,9 +8,10 @@ import {
 } from "../runtime-api.js";
 import { acquireWeixinAccountLock } from "./account-lock.js";
 import { WEIXIN_CHANNEL, type ResolvedWeixinAccount } from "./accounts.js";
-import { getUpdates, sendTextWeixin } from "./api.js";
+import { getUpdates, sendTextWeixin, sendTyping } from "./api.js";
+import { getCachedWeixinConfig, type CachedWeixinConfig } from "./config-cache.js";
 import { isRecentWeixinInboundMessage } from "./inbound-dedupe.js";
-import { type MessageItem, MessageType, type WeixinMessage } from "./protocol.js";
+import { type MessageItem, MessageType, TypingStatus, type WeixinMessage } from "./protocol.js";
 import { getWeixinRuntime } from "./runtime.js";
 import { readWeixinSyncBuf, writeWeixinSyncBuf } from "./sync-buf.js";
 import {
@@ -63,6 +64,92 @@ function markdownToPlainText(text: string): string {
 
 function isWeixinSenderAllowed(senderId: string, allowFrom: string[]): boolean {
   return allowFrom.some((entry) => entry.trim() === senderId);
+}
+
+function createWeixinTypingReplyOptions(params: {
+  account: ResolvedWeixinAccount;
+  senderId: string;
+  contextToken?: string;
+  cachedConfigPromise?: Promise<CachedWeixinConfig>;
+  log?: WeixinLogSink;
+}): {
+  onReplyStart: () => Promise<void>;
+  onTypingCleanup: () => void;
+} {
+  let typingTicket: string | null | undefined;
+  let closed = false;
+  let typingStarted = false;
+  const pendingStartTasks = new Set<Promise<void>>();
+  const configPromise =
+    params.cachedConfigPromise ??
+    getCachedWeixinConfig({
+      account: params.account,
+      userId: params.senderId,
+      contextToken: params.contextToken,
+      log: params.log?.debug,
+    });
+
+  const ensureTypingTicket = async (): Promise<string | undefined> => {
+    if (typingTicket !== undefined) {
+      return typingTicket ?? undefined;
+    }
+    const cached = await configPromise;
+    typingTicket = cached.typingTicket?.trim() || null;
+    return typingTicket ?? undefined;
+  };
+
+  const sendTypingStatus = async (status: number): Promise<void> => {
+    try {
+      const ticket = await ensureTypingTicket();
+      if (!ticket) {
+        return;
+      }
+      if (closed && status === TypingStatus.TYPING) {
+        return;
+      }
+      if (status === TypingStatus.CANCEL && !typingStarted) {
+        return;
+      }
+      await sendTyping({
+        account: params.account,
+        body: {
+          ilink_user_id: params.senderId,
+          typing_ticket: ticket,
+          status,
+        },
+      });
+      if (status === TypingStatus.TYPING) {
+        typingStarted = true;
+      }
+    } catch (error) {
+      params.log?.debug?.(
+        `[${params.account.accountId}] sendTyping failed for ${params.senderId}: ${String(error)}`,
+      );
+    }
+  };
+
+  const trackPendingStart = (task: Promise<void>) => {
+    pendingStartTasks.add(task);
+    void task.finally(() => {
+      pendingStartTasks.delete(task);
+    });
+  };
+
+  return {
+    onReplyStart: async () => {
+      const task = sendTypingStatus(TypingStatus.TYPING);
+      trackPendingStart(task);
+    },
+    onTypingCleanup: () => {
+      closed = true;
+      void (async () => {
+        if (pendingStartTasks.size > 0) {
+          await Promise.allSettled([...pendingStartTasks]);
+        }
+        await sendTypingStatus(TypingStatus.CANCEL);
+      })();
+    },
+  };
 }
 
 async function resolveWeixinDirectAccess(params: {
@@ -138,6 +225,12 @@ export async function processWeixinDirectMessage(params: {
   });
 
   const textBody = extractTextBody(params.message.item_list);
+  const typingConfigPromise = getCachedWeixinConfig({
+    account: params.account,
+    userId: senderId,
+    contextToken: params.message.context_token,
+    log: params.log?.debug,
+  });
   let rawBody = textBody;
   let bodyForAgent = textBody;
   let mediaContext: Record<string, unknown> | undefined;
@@ -247,6 +340,13 @@ export async function processWeixinDirectMessage(params: {
     timestamp: params.message.create_time_ms,
     commandAuthorized: resolvedAccess.commandAuthorized,
     extraContext: mediaContext,
+    replyOptions: createWeixinTypingReplyOptions({
+      account: params.account,
+      senderId,
+      contextToken: params.message.context_token,
+      cachedConfigPromise: typingConfigPromise,
+      log: params.log,
+    }),
     deliver: async (payload) => {
       const runtime = getWeixinRuntime();
       const rawText =

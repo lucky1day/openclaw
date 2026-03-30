@@ -1,10 +1,18 @@
 import crypto from "node:crypto";
 import type { ResolvedWeixinAccount } from "./accounts.js";
-import { MessageItemType, MessageState, MessageType, type GetUpdatesResp } from "./protocol.js";
+import {
+  MessageItemType,
+  MessageState,
+  MessageType,
+  type GetConfigResp,
+  type GetUpdatesResp,
+  type SendTypingReq,
+} from "./protocol.js";
 
 const CHANNEL_VERSION = "2026.3.26";
 const DEFAULT_API_TIMEOUT_MS = 15_000;
 const DEFAULT_LONG_POLL_TIMEOUT_MS = 35_000;
+const DEFAULT_CONFIG_TIMEOUT_MS = 10_000;
 
 function ensureTrailingSlash(baseUrl: string): string {
   return baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
@@ -81,6 +89,43 @@ export async function getUpdates(params: {
     }
     throw error;
   }
+}
+
+export async function getConfig(params: {
+  account: ResolvedWeixinAccount;
+  ilinkUserId: string;
+  contextToken?: string;
+  abortSignal?: AbortSignal;
+}): Promise<GetConfigResp> {
+  const raw = await apiFetch({
+    account: params.account,
+    endpoint: "ilink/bot/getconfig",
+    body: JSON.stringify({
+      ilink_user_id: params.ilinkUserId,
+      context_token: params.contextToken,
+      base_info: { channel_version: CHANNEL_VERSION },
+    }),
+    timeoutMs: DEFAULT_CONFIG_TIMEOUT_MS,
+    abortSignal: params.abortSignal,
+  });
+  return JSON.parse(raw) as GetConfigResp;
+}
+
+export async function sendTyping(params: {
+  account: ResolvedWeixinAccount;
+  body: SendTypingReq;
+  abortSignal?: AbortSignal;
+}): Promise<void> {
+  await apiFetch({
+    account: params.account,
+    endpoint: "ilink/bot/sendtyping",
+    body: JSON.stringify({
+      ...params.body,
+      base_info: { channel_version: CHANNEL_VERSION },
+    }),
+    timeoutMs: DEFAULT_CONFIG_TIMEOUT_MS,
+    abortSignal: params.abortSignal,
+  });
 }
 
 let nextClientId = 0;

@@ -1,4 +1,5 @@
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
+import type { GetReplyOptions } from "../auto-reply/types.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -9,6 +10,11 @@ import {
 import { resolveInboundRouteEnvelopeBuilderWithRuntime } from "./inbound-envelope.js";
 import { recordInboundSessionAndDispatchReply } from "./inbound-reply-dispatch.js";
 import type { OutboundReplyPayload } from "./reply-payload.js";
+
+type DirectDmReplyOptions = Omit<
+  Omit<GetReplyOptions, "onToolResult" | "onBlockReply">,
+  "onModelSelected"
+>;
 
 export type DirectDmCommandAuthorizationRuntime = {
   shouldComputeCommandAuthorized: (rawBody: string, cfg: OpenClawConfig) => boolean;
@@ -246,6 +252,7 @@ export async function dispatchInboundDirectDmWithRuntime(params: {
   deliver: (payload: OutboundReplyPayload) => Promise<void>;
   onRecordError: (err: unknown) => void;
   onDispatchError: (err: unknown, info: { kind: string }) => void;
+  replyOptions?: DirectDmReplyOptions;
 }): Promise<{
   route: DirectDmRoute;
   storePath: string;
@@ -304,6 +311,7 @@ export async function dispatchInboundDirectDmWithRuntime(params: {
     deliver: params.deliver,
     onRecordError: params.onRecordError,
     onDispatchError: params.onDispatchError,
+    replyOptions: params.replyOptions,
   });
 
   return {

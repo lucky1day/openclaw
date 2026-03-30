@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { dispatchInboundMessage, withReplyDispatcher } from "./dispatch.js";
+import {
+  dispatchInboundMessage,
+  dispatchInboundMessageWithBufferedDispatcher,
+  withReplyDispatcher,
+} from "./dispatch.js";
 import type { ReplyDispatcher } from "./reply/reply-dispatcher.js";
 import { buildTestCtx } from "./reply/test-ctx.js";
 
@@ -87,5 +91,30 @@ describe("withReplyDispatcher", () => {
     });
 
     expect(order).toEqual(["sendFinalReply", "markComplete", "waitForIdle"]);
+  });
+
+  it("preserves caller replyOptions when buffered dispatcher has no typing callbacks", async () => {
+    const onReplyStart = vi.fn(async () => {});
+    const delivered: string[] = [];
+
+    await dispatchInboundMessageWithBufferedDispatcher({
+      ctx: buildTestCtx(),
+      cfg: {} as OpenClawConfig,
+      dispatcherOptions: {
+        deliver: async (payload) => {
+          delivered.push(payload.text ?? "");
+        },
+      },
+      replyOptions: {
+        onReplyStart,
+      },
+      replyResolver: async (_ctx, opts) => {
+        await opts?.onReplyStart?.();
+        return { text: "ok" };
+      },
+    });
+
+    expect(onReplyStart).toHaveBeenCalledTimes(1);
+    expect(delivered).toEqual(["ok"]);
   });
 });

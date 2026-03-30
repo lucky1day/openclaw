@@ -17,6 +17,11 @@ export const MessageState = {
   FINISH: 2,
 } as const;
 
+export const TypingStatus = {
+  TYPING: 1,
+  CANCEL: 2,
+} as const;
+
 export interface TextItem {
   text?: string;
 }
@@ -65,4 +70,17 @@ export interface GetUpdatesResp {
   msgs?: WeixinMessage[];
   get_updates_buf?: string;
   longpolling_timeout_ms?: number;
+}
+
+export interface GetConfigResp {
+  ret?: number;
+  errcode?: number;
+  errmsg?: string;
+  typing_ticket?: string;
+}
+
+export interface SendTypingReq {
+  ilink_user_id: string;
+  typing_ticket?: string;
+  status?: number;
 }
