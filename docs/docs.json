@@ -989,6 +989,7 @@
                   "channels/telegram",
                   "channels/tlon",
                   "channels/twitch",
+                  "channels/weixin",
                   "plugins/voice-call",
                   "channels/whatsapp",
                   "channels/zalo",
@@ -1632,6 +1633,7 @@
                   "zh-CN/channels/telegram",
                   "zh-CN/channels/tlon",
                   "zh-CN/channels/twitch",
+                  "zh-CN/channels/weixin",
                   "zh-CN/channels/whatsapp",
                   "zh-CN/channels/zalo",
                   "zh-CN/channels/zalouser"

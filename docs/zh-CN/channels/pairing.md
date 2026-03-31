@@ -42,7 +42,7 @@ openclaw pairing list telegram
 openclaw pairing approve telegram <CODE>
 ```
 
-支持的渠道：`telegram`、`whatsapp`、`signal`、`imessage`、`discord`、`slack`。
+支持的渠道：`telegram`、`whatsapp`、`weixin`、`signal`、`imessage`、`discord`、`slack`。
 
 ### 状态存储位置
 
@@ -87,3 +87,4 @@ openclaw devices reject <requestId>
   - iMessage：[iMessage](/channels/imessage)
   - Discord：[Discord](/channels/discord)
   - Slack：[Slack](/channels/slack)
+  - 微信：[微信](/channels/weixin)
